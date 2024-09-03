@@ -57,6 +57,206 @@ for i in range(T):
 targeting_list = [0 for i in range(S)]
 avg_error = []
 
+import torch
+import torch.nn as nn
+import torch.optim as optim
+from torch.distributions import Categorical
+
+# Define the Actor-Critic Network
+class ActorCritic(nn.Module):
+    def __init__(self, state_dim, action_dim):
+        super(ActorCritic, self).__init__()
+        self.fc1 = nn.Linear(state_dim, 64)
+        self.fc2 = nn.Linear(state_dim, 256)
+        self.fc3 = nn.Linear(state_dim, 256)
+        self.fc4 = nn.Linear(state_dim, 128)
+        self.fc_policy1 = nn.Linear(128, 64)
+        self.fc_policy2 = nn.Linear(64, action_dim)
+        self.fc_value1 = nn.Linear(128, 64)
+        self.fc_value2 = nn.Linear(64, 1)
+        self.tanh = nn.Tanh()
+    
+    def forward(self, x):
+        x = self.tanh(self.fc1(x))
+        x = self.tanh(self.fc2(x))
+        x = self.tanh(self.fc3(x))
+        x = self.tanh(self.fc4(x))
+        policy_logits = self.fc_policy2(self.fc_policy1(x))
+        value = self.fc_value2(self.fc_value1(x))
+        return policy_logits, value
+
+    def get_action(self, state):
+        policy_logits, _ = self.forward(state)
+        policy_dist = Categorical(logits=policy_logits)
+        action = policy_dist.sample()
+        return action, policy_dist.log_prob(action)
+
+    def get_value(self, state):
+        _, value = self.forward(state)
+        return value
+
+# PPO Hyperparameters
+gamma = 0.99
+epsilon = 0.2
+lr = 0.001
+epochs = 10
+batch_size = 64
+
+# Instantiate the model, optimizer
+state_dim = T*(6*6 + 6)  # cov matrix + state vector
+action_dim = T
+model = ActorCritic(state_dim, action_dim)
+optimizer = optim.Adam(model.parameters(), lr=lr)
+
+# Sample training loop (pseudo-environment interaction)
+def ppo_update(states, actions, log_probs, returns, advantages):
+    for _ in range(epochs):
+        policy_logits, values = model(states)
+        policy_dist = Categorical(logits=policy_logits)
+        new_log_probs = policy_dist.log_prob(actions)
+        
+        # Compute ratios
+        ratios = torch.exp(new_log_probs - log_probs)
+        
+        # PPO loss
+        surr1 = ratios * advantages
+        surr2 = torch.clamp(ratios, 1 - epsilon, 1 + epsilon) * advantages
+        policy_loss = -torch.min(surr1, surr2).mean()
+        
+        value_loss = nn.MSELoss()(values, returns)
+        loss = policy_loss + 0.5 * value_loss
+        
+        # Take optimization step
+        optimizer.zero_grad()
+        loss.backward()
+        optimizer.step()
+
+# Example of gathering experience
+def collect_trajectories(model, steps=2048):
+    states = []
+    actions = []
+    log_probs = []
+    rewards = []
+    values = []
+    dones = []
+
+    sensors_ = []
+    targets_ = []
+    for i in range(S):
+        angle = i * 2*np.pi / S
+        b1 = np.cos(angle)
+        b2 = np.sin(angle)
+        sensor = sim.Sensor()
+        sensor.p[0] = b1 * sensor_radius_bound
+        sensor.p[1] = b2 * sensor_radius_bound
+        sensor.p[2] = 1500
+        sensors_.append(sensor)
+        # print(sensor.p)
+
+    for i in range(T):
+        target = sim.Target()
+        height = np.random.uniform(target_height_bound[0], target_height_bound[1], 1)[0]
+        pos01 = functions.random2d() * target_radius_bound
+        speed = np.random.uniform(target_speed_range[0], target_speed_range[1], 1)
+        dir01 = functions.random2d()
+        target.x[0:2] = pos01
+        target.x[2] = height
+        target.x[3:5] = dir01 * speed
+        target.x_[:] = np.random.multivariate_normal(target.x[:], target.P)
+        target.x_[3:6] *= 0
+        targets_.append(target)
+
+    a = np.zeros((6,T))
+    b = np.zeros((6,6,T))
+    for i in range(T):
+        a[:,i] = targets[i].x_
+        b[:,i] = targets[i].P
+    state = np.append(a.flatten(),b.flatten())
+    for t in map(lambda x: x * globals.dt, range(int(sim_duration/globals.dt))):
+        #CHOOSE TARGETS PPO
+        targeting_list = np.zeros((S))
+        state_tensor = torch.FloatTensor(state).unsqueeze(0)
+        action, log_prob = model.get_action(state_tensor)
+        value = model.get_value(state_tensor)
+
+        #PROPAGATE
+        reward = 0
+        for target in targets:
+            reward += np.trace(target.P)
+            target.propagate()
+        for i in range(S):
+            if sensors[i].propagate(targets[targeting_list[i]].x_[0:3]):
+                for j in range(T):
+                    if sensors[i].check_in_fov(targets[j].x[0:3]):
+                        targets[j].update(sensors[i].p)
+        for target in targets:
+            reward -= np.trace(target.P)
+        
+        #THIS SHOULD NOT AFFECT SIM
+        states.append(state)
+        actions.append(action)
+        log_probs.append(log_prob)
+        rewards.append(reward)
+        values.append(value)
+        dones.append(done)
+        
+        state = new_state
+        
+
+    for _ in range(steps):
+        state_tensor = torch.FloatTensor(state).unsqueeze(0)
+        action, log_prob = model.get_action(state_tensor)
+        value = model.get_value(state_tensor)
+        
+        new_state, reward, done, _ = env.step(action.item())
+        
+        states.append(state)
+        actions.append(action)
+        log_probs.append(log_prob)
+        rewards.append(reward)
+        values.append(value)
+        dones.append(done)
+        
+        state = new_state
+        if done:
+            state = env.reset()
+    
+    return states, actions, log_probs, rewards, values, dones
+
+# Compute returns and advantages
+def compute_returns_and_advantages(rewards, values, dones, gamma=0.99, lam=0.95):
+    returns = []
+    advantages = []
+    gae = 0
+    R = 0
+    for step in reversed(range(len(rewards))):
+        if dones[step]:
+            R = 0
+            gae = 0
+        R = rewards[step] + gamma * R
+        returns.insert(0, R)
+        delta = rewards[step] + gamma * values[step + 1] * (1 - dones[step]) - values[step]
+        gae = delta + gamma * lam * gae
+        advantages.insert(0, gae)
+    
+    returns = torch.tensor(returns)
+    advantages = torch.tensor(advantages)
+    return returns, advantages
+
+# Main training loop (pseudo-code)
+
+for episode in range(1000):  # Number of episodes
+    states, actions, log_probs, rewards, values, dones = collect_trajectories(env, model)
+    returns, advantages = compute_returns_and_advantages(rewards, values, dones)
+    
+    # Convert to tensors
+    states = torch.FloatTensor(states)
+    actions = torch.LongTensor(actions)
+    log_probs = torch.FloatTensor(log_probs)
+    returns = torch.FloatTensor(returns)
+    advantages = (advantages - advantages.mean()) / (advantages.std() + 1e-8)  # Normalize
+    
+    ppo_update(states, actions, log_probs, returns, advantages)
 
 
 for t in map(lambda x: x * globals.dt, range(int(sim_duration/globals.dt))):
