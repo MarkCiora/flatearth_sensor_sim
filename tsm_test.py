@@ -4,13 +4,8 @@ import matplotlib.pyplot as plt
 
 T = 2
 
-a = np.zeros((3,3,T))
-b = np.zeros((3,T))
+a = np.random.uniform(0,1, size=(10,5,3))
+b = a.sum(axis=1)
 
-print(a,b)
+print(a.shape, b.shape)
 
-
-# print(a.flatten(),b.flatten())
-
-c = np.append(a,b)
-print(c)

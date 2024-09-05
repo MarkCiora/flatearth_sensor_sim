@@ -1,4 +1,5 @@
 import numpy as np
+import torch
 
 floattype = np.float64
 
@@ -12,15 +13,9 @@ G_km = 6.6743 * (10**-20)
 
 G_EM_km = EM_km * G_km
 
-dt = .5
+dt = 1
+
+device = 'cuda:0' if torch.cuda.is_available() else 'cpu'
 
 if __name__ == "__main__":
-    import numpy as np
-    altitude = 1000
-    speed = np.sqrt(G_EM_km / (ER_km + altitude))
-    print("speed:", speed)
-
-    period = 2*np.pi*(ER_km + altitude) / speed
-    print("period:", period)
-
-    print(3600*24)
+    print(device)

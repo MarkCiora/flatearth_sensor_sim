@@ -1,8 +1,10 @@
 import numpy as np
+import torch
 
 import globals
 from globals import floattype
 import functions
+
 
 class Sensor:
     ppdt = 5
@@ -110,7 +112,7 @@ class Target:
         H[1,0:3] = b2 * np.sqrt(Target.R[1,1]) * r
         S = H@self.P@H.T + Target.R
         K = self.P@H.T@np.linalg.pinv(S)
-        return (self.P - K@H@self.P)
+        return np.trace(self.P - K@H@self.P)
     
     def copy(self):
         tcopy = Target()
@@ -119,6 +121,104 @@ class Target:
         tcopy.P[:] = self.P
         return tcopy
 
+target_height_bound = [20, 400]
+target_radius_bound = 1500
+target_speed_range = [2,2.5]
+
+sensor_height_bound = [1000, 2000]
+sensor_radius_bound = 2500
+
+class Simulation:
+    def __init__(self, S=3, T=5, sim_duration=100):
+        sensors = []
+        targets = []
+        self.S = S
+        self.T = T
+        self.time = 0
+        self.dt = globals.dt
+        self.sim_duration = sim_duration
+        for i in range(S):
+            angle = i * 2*np.pi / S
+            b1 = np.cos(angle)
+            b2 = np.sin(angle)
+            sensor = Sensor()
+            sensor.p[0] = b1 * sensor_radius_bound
+            sensor.p[1] = b2 * sensor_radius_bound
+            sensor.p[2] = 1500
+            sensors.append(sensor)
+        for i in range(T):
+            target = Target()
+            height = np.random.uniform(target_height_bound[0], target_height_bound[1], 1)[0]
+            pos01 = functions.random2d() * target_radius_bound
+            speed = np.random.uniform(target_speed_range[0], target_speed_range[1], 1)
+            dir01 = functions.random2d()
+            target.x[0:2] = pos01
+            target.x[2] = height
+            target.x[3:5] = dir01 * speed
+            target.x_[:] = np.random.multivariate_normal(target.x[:], target.P)
+            target.x_[3:6] *= 0
+            targets.append(target)
+        self.sensors = sensors
+        self.targets = targets
+
+    def step(self, action):
+        targets = self.targets
+        sensors = self.sensors
+        reward = 0
+        for target in targets:
+            reward += np.sqrt(np.trace(target.P))
+            target.propagate()
+        for i in range(self.S):
+            if sensors[i].propagate(targets[action[i]].x_[0:3]):
+                for j in range(self.T):
+                    if sensors[i].check_in_fov(targets[j].x[0:3]):
+                        targets[j].update(sensors[i].p)
+        for target in targets:
+            reward -= np.sqrt(np.trace(target.P))
+        self.time += self.dt
+        return reward
+
+    def get_state_vector(self):
+        # x_ for each target
+        # P for each target
+        # p for each sensor
+        # F for each sensor
+        x1 = []
+        x2 = []
+        x3 = []
+        x4 = []
+        s1 = np.sqrt(3)
+        s2 = 6
+        
+        cov_trace_max = 1e-8
+        distances_max = 1e-8
+        for i in range(self.T):
+            cov_trace_max = max(np.trace(self.targets[i].P), cov_trace_max)
+            distances_max = max(np.linalg.norm(self.targets[i].x_), distances_max)
+        for i in range(self.S):
+            distances_max = max(np.linalg.norm(self.sensors[i].p), distances_max)
+        for i in range(self.T):
+            x1.append(self.targets[i].x_)
+            x2.append(self.targets[i].P)
+        for i in range(self.S):
+            x3.append(self.sensors[i].p)
+            x4.append(self.sensors[i].F)
+        s1 /= distances_max
+        s2 /= cov_trace_max
+        x1 = np.stack(x1).flatten() * s1-0.5
+        x2 = np.stack(x2).flatten() * s2-0.5
+        x3 = np.stack(x3).flatten() * s1-0.5
+        x4 = np.stack(x4).flatten()
+        return np.hstack((x1,x2,x3,x4,np.log(s1*1e3),np.log(s2)*2e-1)).ravel()
+    
+    def get_uncertainty(self):
+        s = 0
+        for t in self.targets:
+            s += np.sqrt(np.trace(t.P))
+        return s
+
+    def is_done(self):
+        return self.time >= self.sim_duration
 
 if __name__ == "__main__":
     T = 1
