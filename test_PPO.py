@@ -14,8 +14,8 @@ T = 2
 sim_duration = 60
 
 state_dim = (6*6 + 6)*T + (3 + 3)*S + 2
-episodes = 100
-reps_before_update = 5
+episodes = 1000
+reps_before_update = 4
 
 ppo = PPO.PPO(state_dim, S, T)
 # ppo.policy.load_state_dict(torch.load('model.dat', weights_only=True)) 

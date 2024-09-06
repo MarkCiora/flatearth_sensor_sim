@@ -29,50 +29,46 @@ class Network(nn.Module):
         self.state_dim = state_dim
         self.S = S
         self.T = T
-        self.actor = nn.Sequential(
-                        nn.Linear(state_dim, 1024),
-                        nn.ReLU(),
-                        nn.Linear(1024, 2048),
-                        nn.ReLU(),
-                        nn.Linear(2048, 4096),
-                        nn.ReLU(),
-                        nn.Linear(4096, 1024),
-                        nn.ReLU(),
-                        nn.Linear(1024, 256),
-                        nn.ReLU(),
-                        nn.Linear(256, S*T)
-                    )
-        self.critic = nn.Sequential(
-                        nn.Linear(state_dim, 512),
-                        nn.ReLU(),
-                        nn.Linear(512, 1024),
-                        nn.ReLU(),
-                        nn.Linear(1024, 2048),
-                        nn.ReLU(),
-                        nn.Linear(2048, 1024),
-                        nn.ReLU(),
-                        nn.Linear(1024, 256),
-                        nn.ReLU(),
-                        nn.Linear(256, 1)
-                    )
+        self.fc1a = nn.Linear(state_dim, 1024)
+        self.fc2a = nn.Linear(1024, 2048)
+        self.fc3a = nn.Linear(2048, 1024)
+        self.fc4a = nn.Linear(1024, 512)
+        self.fc5a = nn.Linear(512, S*T)
+        self.fc1v = nn.Linear(state_dim, 1024)
+        self.fc2v = nn.Linear(1024, 2048)
+        self.fc3v = nn.Linear(2048, 1024)
+        self.fc4v = nn.Linear(1024, 512)
+        self.fc5v = nn.Linear(512, 1)
         
-    def forward(self):
-        raise NotImplementedError
+    def forward(self, x):
+        x1 = nn.ReLU(self.fc1a(x))
+        x1 = nn.ReLU(self.fc2a(x1))
+        x1 = nn.ReLU(self.fc3a(x1))
+        x1 = nn.ReLU(self.fc4a(x1))
+        action = self.fc5a(x1)
+        x2 = nn.ReLU(self.fc1v(x))
+        x2 = nn.ReLU(self.fc2v(x2))
+        x2 = nn.ReLU(self.fc3v(x2))
+        x2 = nn.ReLU(self.fc4v(x2))
+        value = self.fc5v(x2)
+        return action, value
     
     def act(self, state):
-        action_logits = self.actor(state).view(-1, self.S, self.T)
+        # action_logits = self.actor(state).view(-1, self.S, self.T)
+        # value = self.critic(state)
+        action_logits, value = self.forward(state)
         dist = torch.distributions.Categorical(logits=action_logits)
         action = dist.sample()
         action_logprobs = dist.log_prob(action)
-        value = self.critic(state)
         return action.detach(), action_logprobs.detach(), value.detach()
     
     def evaluate(self, state, action):
-        action_logits = self.actor(state).view(-1, self.S, self.T)
+        # action_logits = self.actor(state).view(-1, self.S, self.T)
+        # value = self.critic(state)
+        action_logits, value = self.forward(state)
         dist = torch.distributions.Categorical(logits=action_logits)
         action_logprobs = dist.log_prob(action)
         entropy = dist.entropy()
-        value = self.critic(state)
         return action_logprobs, value, entropy
     
 class PPO:

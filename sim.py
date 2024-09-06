@@ -112,7 +112,7 @@ class Target:
         H[1,0:3] = b2 * np.sqrt(Target.R[1,1]) * r
         S = H@self.P@H.T + Target.R
         K = self.P@H.T@np.linalg.pinv(S)
-        return np.trace(self.P - K@H@self.P)
+        return np.trace(K@H@self.P)
     
     def copy(self):
         tcopy = Target()
@@ -169,10 +169,12 @@ class Simulation:
             reward += np.sqrt(np.trace(target.P))
             target.propagate()
         for i in range(self.S):
-            if sensors[i].propagate(targets[action[i]].x_[0:3]):
+            if sensors[i].propagate(targets[action[i]].x[0:3]):
                 for j in range(self.T):
                     if sensors[i].check_in_fov(targets[j].x[0:3]):
+                        # print("update:", np.trace(targets[j].P), end="")
                         targets[j].update(sensors[i].p)
+                        # print("--->", np.trace(targets[j].P))
         for target in targets:
             reward -= np.sqrt(np.trace(target.P))
         self.time += self.dt
