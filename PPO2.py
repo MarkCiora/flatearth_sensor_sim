@@ -1,6 +1,7 @@
 import numpy as np
 import torch
 from torch import nn
+from torch.nn.functional import relu
 
 import globals
 
@@ -24,47 +25,100 @@ class RolloutBuffer:
         del self.is_terminals[:]
 
 class Network(nn.Module):
-    def __init__(self, state_dim, S, T):
+    def __init__(self, state_dim_S, state_dim_T, S, T, extra):
         super(Network, self).__init__()
-        self.state_dim = state_dim
+        self.state_dim_S = state_dim_S
+        self.state_dim_T = state_dim_T
         self.S = S
         self.T = T
-        self.fc1a = nn.Linear(state_dim, 1024)
-        self.fc2a = nn.Linear(1024, 2048)
-        self.fc3a = nn.Linear(2048, 1024)
-        self.fc4a = nn.Linear(1024, 512)
-        self.fc5a = nn.Linear(512, S*T)
-        self.fc1v = nn.Linear(state_dim, 1024)
-        self.fc2v = nn.Linear(1024, 2048)
-        self.fc3v = nn.Linear(2048, 1024)
-        self.fc4v = nn.Linear(1024, 512)
-        self.fc5v = nn.Linear(512, 1)
+        self.extra = extra
+
+        self.target_embedding_width = 256
+        self.sensor_embedding_width = 128
+
+        self.target_fc1 = nn.Linear(state_dim_T + extra, 256)
+        self.target_fc2 = nn.Linear(256, 1024)
+        self.target_fc3 = nn.Linear(1024, 512)
+        self.target_fc4 = nn.Linear(512, self.target_embedding_width)
+
+        self.sensor_fc1 = nn.Linear(state_dim_S + extra, 256)
+        self.sensor_fc2 = nn.Linear(256, 1024)
+        self.sensor_fc3 = nn.Linear(1024, 512)
+        self.sensor_fc4 = nn.Linear(512, self.sensor_embedding_width)
+
+        self.shared_fc1 = nn.Linear(self.sensor_embedding_width * self.S + \
+                                    self.target_embedding_width * self.T, 2048)
+        self.shared_fc2 = nn.Linear(2048, 2048)
+        self.shared_fc3 = nn.Linear(2048, 1024)
+        
+        self.actor_fc1 = nn.Linear(1024, 1024)
+        self.actor_fc2 = nn.Linear(1024, 512)
+        self.actor_fc3 = nn.Linear(512, S*T)
+
+        self.value_fc1 = nn.Linear(1024, 1024)
+        self.value_fc2 = nn.Linear(1024, 512)
+        self.value_fc3 = nn.Linear(512, 1)
         
     def forward(self, x):
-        x1 = nn.ReLU(self.fc1a(x))
-        x1 = nn.ReLU(self.fc2a(x1))
-        x1 = nn.ReLU(self.fc3a(x1))
-        x1 = nn.ReLU(self.fc4a(x1))
-        action = self.fc5a(x1)
-        x2 = nn.ReLU(self.fc1v(x))
-        x2 = nn.ReLU(self.fc2v(x2))
-        x2 = nn.ReLU(self.fc3v(x2))
-        x2 = nn.ReLU(self.fc4v(x2))
-        value = self.fc5v(x2)
+        # print(x.shape, self.state_dim_S * self.S, self.state_dim_T * self.T)
+        x = x.view(-1, self.state_dim_S * self.S + self.state_dim_T * self.T + self.extra)
+        scaling = x[:,self.state_dim_S * self.S + self.state_dim_T * self.T:self.state_dim_S * self.S + self.state_dim_T * self.T + self.extra]
+        sensor_input = x[:, 0:self.state_dim_S * self.S]
+        target_input = x[:, self.state_dim_S * self.S:self.state_dim_S * self.S + self.state_dim_T * self.T]
+
+        scaling = scaling.unsqueeze(1)
+        sensor_input = sensor_input.view(-1, self.S, self.state_dim_S)
+        target_input = target_input.view(-1, self.T, self.state_dim_T)
+
+        scaling = scaling.repeat(1,2,1)
+        # print(scaling)
+
+        # print(scaling.shape, sensor_input.shape, target_input.shape)
+
+        sensor_input = torch.cat((sensor_input, scaling), dim=2)
+        target_input = torch.cat((target_input, scaling), dim=2)
+        # print(scaling, sensor_input, target_input)
+
+        x1 = relu(self.target_fc1(target_input))
+        x1 = relu(self.target_fc2(x1))
+        x1 = relu(self.target_fc3(x1))
+        x1 = relu(self.target_fc4(x1))
+
+        x2 = relu(self.sensor_fc1(sensor_input))
+        x2 = relu(self.sensor_fc2(x2))
+        x2 = relu(self.sensor_fc3(x2))
+        x2 = relu(self.sensor_fc4(x2))
+
+        x1 = x1.view(-1, self.T * self.target_embedding_width)
+        x2 = x2.view(-1, self.S * self.sensor_embedding_width)
+
+        x = torch.cat((x1, x2), dim=1)
+        x = relu(self.shared_fc1(x))
+        x = relu(self.shared_fc2(x))
+        x = relu(self.shared_fc3(x))
+        
+        action = relu(self.actor_fc1(x))
+        action = relu(self.actor_fc2(action))
+        action = self.actor_fc3(action).view(-1, self.S, self.T)
+
+        value = relu(self.value_fc1(x))
+        value = relu(self.value_fc2(value))
+        value = self.value_fc3(value).view(-1, 1)
+
         return action, value
     
     def act(self, state):
-        # action_logits = self.actor(state).view(-1, self.S, self.T)
-        # value = self.critic(state)
         action_logits, value = self.forward(state)
         dist = torch.distributions.Categorical(logits=action_logits)
         action = dist.sample()
         action_logprobs = dist.log_prob(action)
         return action.detach(), action_logprobs.detach(), value.detach()
     
+    def act_test(self, state):
+        action_logits, value = self.forward(state)
+        return torch.argmax(action_logits, dim=1).detach()
+
     def evaluate(self, state, action):
-        # action_logits = self.actor(state).view(-1, self.S, self.T)
-        # value = self.critic(state)
         action_logits, value = self.forward(state)
         dist = torch.distributions.Categorical(logits=action_logits)
         action_logprobs = dist.log_prob(action)
@@ -72,22 +126,17 @@ class Network(nn.Module):
         return action_logprobs, value, entropy
     
 class PPO:
-    def __init__(self, state_dim, S, T):
+    def __init__(self, state_dim_S, state_dim_T, S, T, extra):
         self.gamma = 0.99
         self.eps_clip = 0.2
-        self.lr_actor = 3e-5
-        self.lr_critic = 1e-5
-        self.epochs = 100
-        self.state_dim = state_dim
+        self.lr = 5e-5
+        self.epochs = 32
         self.S = S
         self.T = T
         self.buffer = RolloutBuffer()
-        self.policy = Network(state_dim, S, T).to(device)
-        self.optimizer = torch.optim.Adam([
-                {'params': self.policy.actor.parameters(), 'lr': self.lr_actor},
-                {'params': self.policy.critic.parameters(), 'lr': self.lr_critic}
-            ])
-        self.policy_old = Network(state_dim, S, T).to(device)
+        self.policy = Network(state_dim_S, state_dim_T, S, T, extra).to(device)
+        self.optimizer = torch.optim.Adam(self.policy.parameters(), lr=self.lr)
+        self.policy_old = Network(state_dim_S, state_dim_T, S, T, extra).to(device)
         self.policy_old.load_state_dict(self.policy.state_dict())
         self.MSELoss = nn.MSELoss()
 
@@ -100,6 +149,12 @@ class PPO:
         self.buffer.actions.append(action)
         self.buffer.logprobs.append(action_logits)
         self.buffer.state_values.append(value)
+        return action.detach().cpu().numpy().squeeze()
+    
+    def select_action_test(self, state):
+        with torch.no_grad():
+            state = torch.FloatTensor(state).to(device)
+            action = self.policy_old.act_test(state)
         return action.detach().cpu().numpy().squeeze()
 
     def update(self):

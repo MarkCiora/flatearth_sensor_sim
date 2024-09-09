@@ -114,6 +114,13 @@ class Target:
         K = self.P@H.T@np.linalg.pinv(S)
         return np.trace(K@H@self.P)
     
+    def copy_true(self):
+        tcopy = Target()
+        tcopy.x[:] = self.x
+        tcopy.x_[:] = self.x_
+        tcopy.P[:] = self.P
+        return tcopy
+    
     def copy(self):
         tcopy = Target()
         tcopy.x[:] = self.x_ #because algorithm doesnt actually know
@@ -211,7 +218,11 @@ class Simulation:
         x2 = np.stack(x2).flatten() * s2-0.5
         x3 = np.stack(x3).flatten() * s1-0.5
         x4 = np.stack(x4).flatten()
-        return np.hstack((x1,x2,x3,x4,np.log(s1*1e3),np.log(s2)*2e-1)).ravel()
+        s1 = np.log(s1*1e3)
+        s2 = np.log(s2)*2e-1
+        #sensor stack, then target
+        x = np.hstack((x3, x4, x1, x2, s1, s2))
+        return x
     
     def get_uncertainty(self):
         s = 0
@@ -221,6 +232,26 @@ class Simulation:
 
     def is_done(self):
         return self.time >= self.sim_duration
+    
+    def copy(self):
+        scopy = Simulation(self.S, self.T, self.sim_duration)
+        scopy.time = self.time
+        for i in range(self.S):
+            scopy.sensors.append(self.sensors[i].copy())
+        for i in range(self.T):
+            scopy.targets.append(self.targets[i].copy())
+        return scopy
+    
+    def copy_true(self):
+        scopy = Simulation(self.S, self.T, self.sim_duration)
+        scopy.time = self.time
+        scopy.sensors = []
+        scopy.targets = []
+        for i in range(self.S):
+            scopy.sensors.append(self.sensors[i].copy())
+        for i in range(self.T):
+            scopy.targets.append(self.targets[i].copy_true())
+        return scopy
 
 if __name__ == "__main__":
     T = 1
