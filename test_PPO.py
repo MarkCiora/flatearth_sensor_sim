@@ -15,8 +15,8 @@ S = 2
 T = 2
 sim_duration = 200
 
-state_dim_S = (6*6 + 6)
-state_dim_T = (3 + 3)
+state_dim_S = (3+3)
+state_dim_T = (6*6 + 6)
 extra = 2
 episodes = 200
 reps_before_update = 4

@@ -33,7 +33,7 @@ class Network(nn.Module):
         self.T = T
         self.extra = extra
 
-        self.target_embedding_width = 256
+        self.target_embedding_width = 128
         self.sensor_embedding_width = 128
 
         self.target_fc1 = nn.Linear(state_dim_T + extra, 256)
@@ -49,18 +49,17 @@ class Network(nn.Module):
         self.shared_fc1 = nn.Linear(self.sensor_embedding_width * self.S + \
                                     self.target_embedding_width * self.T, 2048)
         self.shared_fc2 = nn.Linear(2048, 2048)
-        self.shared_fc3 = nn.Linear(2048, 1024)
+        self.shared_fc3 = nn.Linear(2048, 2048)
         
-        self.actor_fc1 = nn.Linear(1024, 1024)
-        self.actor_fc2 = nn.Linear(1024, 512)
-        self.actor_fc3 = nn.Linear(512, S*T)
+        self.actor_fc1 = nn.Linear(2048, 2048)
+        self.actor_fc2 = nn.Linear(2048, 1024)
+        self.actor_fc3 = nn.Linear(1024, S*T)
 
-        self.value_fc1 = nn.Linear(1024, 1024)
+        self.value_fc1 = nn.Linear(2048, 1024)
         self.value_fc2 = nn.Linear(1024, 512)
         self.value_fc3 = nn.Linear(512, 1)
         
     def forward(self, x):
-        # print(x.shape, self.state_dim_S * self.S, self.state_dim_T * self.T)
         x = x.view(-1, self.state_dim_S * self.S + self.state_dim_T * self.T + self.extra)
         scaling = x[:,self.state_dim_S * self.S + self.state_dim_T * self.T:self.state_dim_S * self.S + self.state_dim_T * self.T + self.extra]
         sensor_input = x[:, 0:self.state_dim_S * self.S]
@@ -70,13 +69,14 @@ class Network(nn.Module):
         sensor_input = sensor_input.view(-1, self.S, self.state_dim_S)
         target_input = target_input.view(-1, self.T, self.state_dim_T)
 
-        scaling = scaling.repeat(1,2,1)
+        scaling_sensor = scaling.repeat(1,self.S,1)
+        scaling_target = scaling.repeat(1,self.T,1)
         # print(scaling)
 
         # print(scaling.shape, sensor_input.shape, target_input.shape)
 
-        sensor_input = torch.cat((sensor_input, scaling), dim=2)
-        target_input = torch.cat((target_input, scaling), dim=2)
+        sensor_input = torch.cat((sensor_input, scaling_sensor), dim=2)
+        target_input = torch.cat((target_input, scaling_target), dim=2)
         # print(scaling, sensor_input, target_input)
 
         x1 = relu(self.target_fc1(target_input))
