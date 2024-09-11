@@ -102,6 +102,8 @@ class Target:
         K = self.P@H.T@np.linalg.pinv(S)
         self.x_ = self.x_ + K@y
         self.P = self.P - K@H@self.P
+        for i in range(6):
+            self.P[i,i] = max(self.P[i,i], 0)
     
     def predict_update_FI(self, sensor_pos):
         d = self.x[0:3] - sensor_pos #displacement (vector)
@@ -214,7 +216,10 @@ class Simulation:
             x4.append(self.sensors[i].F)
         s1 /= distances_max
         s2 /= cov_trace_max
-        x1 = np.stack(x1).flatten() * s1-0.5
+        x1 = np.stack(x1)
+        x1[:,0:3] = x1[:,0:3]*s1-0.5
+        x1[:,3:6] = x1[:,3:6]*0.3
+        x1 = x1.flatten()
         x2 = np.stack(x2).flatten() * s2-0.5
         x3 = np.stack(x3).flatten() * s1-0.5
         x4 = np.stack(x4).flatten()
